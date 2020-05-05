@@ -136,7 +136,7 @@ def callback(message):
 
     print("Received message: {}".format(message))
 
-    json_object = json.loads(message.data)
+    json_object = json.loads(message.data.decode(encoding='utf-8'))
     action = json_object['action'] 
     filename = json_object['filename']
     if action == 'download':
