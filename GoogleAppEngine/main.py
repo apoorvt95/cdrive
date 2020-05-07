@@ -42,17 +42,18 @@ app.config['PROJECT'] = 'cc2020project2'
 # and reduce publish latency.
 publisher = pubsub_v1.PublisherClient()
 BUCKET_NAME = 'cc2020project2_bucket'
-storage_client = storage.Client()
-bucket = storage_client.bucket('cc2020project2_bucket')
+# Initialize Google Cloud Storage
+gcs_client = storage.Client()
+bucket = gcs_client.bucket('cc2020project2_bucket')
 URL_CACHE = 'https://storage.cloud.google.com/' + BUCKET_NAME + '/' 
 
-
+'''
 def test():
     client = storage.Client()
     bucket = client.get_bucket(BUCKET_NAME)
     acl = bucket.acl
     acl.user("apoorv2arsenalfc@gmail.com").grant_read()
-
+'''
 
 @app.route('/', methods=['GET'])
 def index():
@@ -61,115 +62,140 @@ def index():
 @cross_origin(supports_credentials=True)
 @app.route('/upload', methods=['POST'])
 def upload():
-    #print (request.data)
-    print ('Upload Started!')
     body = request.get_json()
-    userid = request.form.get('userId')
+    user_id = request.form.get('userId')
+    
+    print ('API ENDPOINT: Upload')
     file_obj = request.files.get('file')
-    print (type(file_obj))
     file_obj_read=file_obj.read()
     file_obj.seek(0)
     file_size = len(file_obj_read)
-    print("File size is", file_size)
+    
+    file_name = file_obj.file_name
+    original_file_name = file_name
 
-    filename = file_obj.filename
-    originalfilename = filename
+    file_name = str(user_id) + file_name 
+    print("Original File name: ", original_file_name)
+    print("Secure File name: ", file_name)
+    
+    print("File size: ", file_size)
 
-    filename = str(userid) + filename 
-    print (filename)
-
-    url=upload_file(file_obj, filename)
+    print("GCS: Uploading file to Cloud Storage...")
+    url=upload_file(file_obj, file_name)
+    print("GCS: UPLOAD SUCCESS")
+    print("FIREBASE: Updating user space usage")
+    update_user_quota(user_id,file_size, True)
+    print("FIREBASE: UPDATE SUCCESS")
     # file_size = 10
     # Find available storage, update its space in DB
+    print("FIREBASE: Finding Free Storage Device")
     storage_id = find_available_storage(file_size)
+    if storage_id == None:
+        # Not enough storage space
+        print("FIREBASE: Not enough storage space available")
+    else:
+        print("FIREBASE: Storage Id Found ", storage_id)
 
     topic = storage_id
-    print(topic)
-    # Update users collections
     
-    update_user_files(userid,storage_id,originalfilename,file_size)
-    print("Done3")
+    print("FIREBASE: Updating File objects for user ", user_id)
+    update_user_files(user_id,storage_id,original_file_name,file_size)
+    print("FIREBASE: UPDATE SUCCESS")
+
     action = "download"
-    print("Done4")
-    payload = build_payload(action,filename)
-    print("Done5")
+    payload = build_payload(action,file_name)
+    
+    print("PUBSUB: publishing message to topic ", topic)
     publish(topic, payload)
-    print ('Publish done!')
+    print("PUBSUB: Message published")
+    print("API SUCCESS: Returning status ", 200)
     return 'UPLOAD_COMPLETE', 200
-    
-    #filename= secure_filename(f.filename)
 
-    
-
-#TODO
 @cross_origin(supports_credentials=True)
 @app.route('/delete', methods=['POST'])
 def delete():
-    print ('Deletion Started!')
+    print ('API ENDPOINT: Delete')
     body = request.get_json()
     print (body)
-    userid = body['userId']
-    filename = body['file']
-    print (userid, filename)
-    originalfilename = filename
-    filename = str(userid) + filename 
-
+    user_id = body['userId']
+    file_name = body['file']
+    print("User id: ", user_id)
+    original_file_name = file_name
+    
+    print("Original File name: ", original_file_name)
+    file_name = str(user_id) + file_name 
+    
+    print("Secure File name: ", file_name)
     #TODO DB Find on which device user's file is stored
-    storage_id = find_storage_id(userid, originalfilename)  
+    storage_id = find_storage_id(user_id, original_file_name)  
     topic = storage_id
     action = "delete"
-    payload = build_payload(action, filename)
+    payload = build_payload(action, file_name)
+    
+    print("PUBSUB: publishing message to topic ", topic)
     publish(topic, payload)
+    
+    print("PUBSUB: Message published")
     #Updating Delete DATABASE
-    print("Updating Firebase for deleting the file")
-    delete_user_file_DB(userid, originalfilename)
-
+    print("FIREBASE: Deleting File object from User collections")
+    file_size = delete_user_file_DB(user_id, original_file_name)
+    print("FIREBASE: UPDATE SUCCESS", file_size)
+    print("FIREBASE: Updating User Space Use")
+    update_user_quota(user_id, file_size , False)
+    print("FIREBASE: UPDATE SUCCESS")
+    print("API: SUCCESS, Returning status ", 200)
+    
     return 'DELETE_COMPLETE', 200
 
 #TODO
 @cross_origin(supports_credentials=True)
 @app.route('/download', methods=['POST'])
 def download():
-    print ('Download Started')
+    print ('API ENDPOINT: Download')
 
     body = request.get_json()
-    print (body)
-    userid = body['userId']
-    filename = body['file']
-    print (userid, filename)
-    originalfilename = filename
-    filename = str(userid) + filename 
+    user_id = body['userId']
+    file_name = body['file']
+    print("User Id: ", user_id)
+    original_file_name = file_name
+    print("Original File name: ", original_file_name)
+    file_name = str(user_id) + file_name 
+    
+    print("Secure File name: ", file_name)
+
+    if check_file_in_cache(file_name):
+        return URL_CACHE+file_name, 200
     
 
-    if check_file_in_cache(filename):
-        return URL_CACHE+filename, 200
+    print("FIREBASE: Finding storage where the file is stored")
+    storage_id = find_storage_id(user_id, original_file_name)
     
-
-    #TODO DB Operation find the storage id containing user file
-    storage_id = find_storage_id(userid, originalfilename)
-    print(storage_id)
     if storage_id==None:
+        #TODO ERROR HANDLING
+        
+        print("FIREBASE: No storage device available with enough free space")
         return 'No such file Exists!'
+    else:
+        print("FIREBASE: Storage id found ", storage_id)
     topic = storage_id
-    print (topic)
+    
     action = "upload"
-   
-    payload = build_payload(action,filename)
+    
+    print("PUBSUB: publishing message to topic ", topic)
+    payload = build_payload(action,file_name)
+    print("PUBSUB: Message published")
     publish(topic, payload)
 
     #Check when the file is uploaded
 
-    resp = download_file(filename)
-    print (resp)
-    t = threading.Thread(target=delete_file_from_storage_after_time_t, args=(15,filename,)) 
+    resp = download_file(file_name)
+    print("GCS: File Url ", resp)
+    print("Spawning a thread to delete file from gcs...")
+    t = threading.Thread(target=delete_file_from_storage_after_time_t, args=(15,file_name,)) 
     t.start()
-    #print (delete_file_from_cloud(filename))
-    return resp
-    #TODO Return the File to UI
-    # Create path of the file, this method will return file as attachment to UI
-    #path = os.path.join(os.getcwd(),"filename")
-    #return send_file(path, as_attachment=True)
-
+    print("Thread started...")
+    print("API: SUCCESS, Returning status ", 200)
+    return resp, 200
 
 
 @app.errorhandler(500)
@@ -180,67 +206,80 @@ def server_error(e):
     See logs for full stacktrace.
     """.format(e), 500
 
-def delete_file_from_storage_after_time_t(t, filename):
+def delete_file_from_storage_after_time_t(t, file_name):
     time.sleep(t)
-    delete_file_from_cloud(filename)
+    print("THREAD: Delete executed")
+    delete_file_from_cloud(file_name)
 
 def find_available_storage(file_size):
-    storageid = None
+    storage_id = None
     sd_collection = db.reference('/storageDevices')
     storage_dic = sd_collection.get()
-    for k,device_obj in storage_dic.items():
-        print(device_obj)
-        if(device_obj['availableSpace']>=file_size):
-            storageid = device_obj['storageId']
-            print (storageid)
+    sorted_keys = sorted(d, key=lambda x: storage_dic[x]["availableSpace"])
+    for k in sorted_keys:
+        if(storage_dic[key]['availableSpace']>=file_size):
+            storage_id = device_obj['storageId']
             storage_dic[k]['availableSpace'] = storage_dic[k]['availableSpace']-file_size
             break
     sd_collection.set(storage_dic)
-    return storageid
+    return storage_id
 
 
-def find_storage_id(userid, filename):
+def find_storage_id(user_id, file_name):
     print ('Finding File in Firebase!')
-    filename=filename.replace('.','')
-    print(filename)
-    path = ['users',userid,'files',filename,'storageId']
+    file_name=file_name.replace('.','')
+    print(file_name)
+    path = ['users',user_id,'files',file_name,'storageId']
     path = "/".join(path)
-    storageid = db.reference(path).get()
-    print(type(storageid))
-    print("asdasd",storageid)
-    return storageid
+    storage_id = db.reference(path).get()
+    print("File found in storage id", storage_id)
+    return storage_id
 
-def update_user_files(userid,storageid,filename,filesize):
-    print('Updating user file in Firebase!')
-    file_key = filename.replace('.','')
+def update_user_quota(user_id, file_size):  
+    path = ['users', user_id]
+    path = "/".join(path)
+    users_ref = db.reference(path)
+    users_dic = users_ref.get()
+    print("FIREBASE: Userid ", user_id, " Current Space Used: ", users_dic['spaceUsed'])
+    users_dic['spaceUsed'] = users_dic['spaceUsed'] + file_size
+    print("FIREBASE: UserId ", user_id, " Updated Space usage: ", users_dic['spaceUsed'])
+    users_ref.set(users_dic)
+
+def update_user_files(user_id,storage_id,file_name,file_size):
+    file_key = file_name.replace('.','')
     file_object = {
-        u'originalFileName':filename ,
-        u'fileName':str(userid) + filename, 
-        u'fileSize':filesize,
-        u'storageId':storageid
+        u'originalFileName':file_name ,
+        u'fileName':str(user_id) + file_name, 
+        u'fileSize':file_size,
+        u'storageId':storage_id
     }
-    db.reference("users").child(userid).child('files').child(file_key).set(file_object)
+    db.reference("users").child(user_id).child('files').child(file_key).set(file_object)
 
-def delete_user_file_DB(userid,filename):
-    path = ['users',userid,'files']
+def delete_user_file_DB(user_id,file_name):
+    print("FIREBASE: Deleting file " , file_name, "from user ", user_id , " collection")
+    path = ['users',user_id,'files']
     path = "/".join(path)
     users_files_ref = db.reference(path)
     files_dic = users_files_ref.get()
-    file_key = filename.replace('.','')
-    filesize = files_dic[file_key]['fileSize']
-    storageid = files_dic[file_key]['storageId']
+    file_key = file_name.replace('.','')
+    file_size = files_dic[file_key]['fileSize']
+    storage_id = files_dic[file_key]['storageId']
     del files_dic[file_key]
     users_files_ref.set(files_dic)
+    print("FIREBASE: SUCCESS")
     
-    path = ['storageDevices',storageid]
+    print("FIREBASE: Updating available space for Storage Device: ", storage_id)
+    
+    path = ['storageDevices',storage_id]
     path = "/".join(path)
     sd_ref = db.reference(path)
     storage_dic = sd_ref.get()
     print(storage_dic)
-    storage_dic['availableSpace']=storage_dic['availableSpace']+filesize
+    storage_dic['availableSpace']=storage_dic['availableSpace']+file_size
     sd_ref.set(storage_dic)
-    print("Updated Storage Device and User Files")
-
+    print("FIREBASE: SUCCESS")
+    
+    return file_size
     
 
 #Publish to a topic
@@ -248,43 +287,30 @@ def delete_user_file_DB(userid,filename):
 #@app.route('/publish', methods=['POST'])
 def publish(topic, payload):
     print ('Publish started!')
-    print (topic)
-    print(type(payload))
-
     data = payload.encode('utf-8')
-    print("Hello")
     #data = request.form.get('payload', 'Example payload').encode('utf-8')
     #topic = request.args.get('topic')
     topic_path = publisher.topic_path('cc2020project2', topic)
-    print (topic_path)
     publisher.publish(topic_path, data=data)
     resp = 'Message for topic ' + topic + ' published'
     return resp, 200
 # [END gae_flex_pubsub_index]
 
-def build_payload(action, filename):
-    #print(action)
-    #print(filename)
-    d = {"action":action, "filename":filename}
+def build_payload(action, file_name):
+    d = {"action":action, "file_name":file_name}
     return json.dumps(d)
 
 #To upload file to Google Storage
-def upload_file(file_obj, filename):
+def upload_file(file_obj, file_name):
     """Process the uploaded file and upload it to Google Cloud Storage."""
-    print ('Uploading file to Google Cloud Storage!')
+    print ('GCS: Uploading file to Google Cloud Storage!')
     uploaded_file = file_obj
 
     if not uploaded_file:
         return 'No file uploaded.', 400
-
-    # Create a Cloud Storage client.
-    gcs = storage.Client()
-
-    # Get the bucket that the file will be uploaded to.
-    bucket = gcs.get_bucket('cc2020project2_bucket')
-
+        
     # Create a new blob and upload the file's content.
-    blob = bucket.blob(filename)
+    blob = bucket.blob(file_name)
 
     blob.upload_from_string(
         uploaded_file.read(),
@@ -301,18 +327,15 @@ def delete_file_from_cloud(blob_name):
     """Deletes a blob from the bucket."""
     # bucket_name = "your-bucket-name"
     # blob_name = "your-object-name"
-    print ('Deletion from the Google Storage started!')
-    storage_client = storage.Client()
-    bucket = storage_client.bucket('cc2020project2_bucket')
+    print ('GCS: Deletion from the Google Storage started!')
     blob = bucket.blob(blob_name)
     blob.delete()
 
     resp = "Blob {} from the Google Storage successfully deleted".format(blob_name)
     return resp
 
-def check_file_in_cache(filename):
-    blob = bucket.blob(filename)
-    #print (blob.exists())
+def check_file_in_cache(file_name):
+    blob = bucket.blob(file_name)
     if blob.exists():
         return True
     else:
@@ -320,24 +343,21 @@ def check_file_in_cache(filename):
 
 #To Delete file from Google Storage
 #@app.route('/download_blob', methods=['GET'])
-def download_file(filename):
+def download_file(file_name):
     """Downloads a blob from the bucket."""
     # bucket_name = "your-bucket-name"
     # source_blob_name = "storage-object-name"
     # destination_file_name = "local/path/to/file"
-    print ('Download started!')
-    storage_client = storage.Client()
-    bucket = storage_client.bucket('cc2020project2_bucket')
-    blob = bucket.blob(filename)
-    #print (blob.exists())
+    print ('GCS: Download started!')
+    blob = bucket.blob(file_name)
     while not blob.exists():
-        print ('Waiting for file to be available!')
+        print ('GCS: Waiting for file to be available')
 
-    #destination_file_name = filename
-    #blob.download_to_filename(destination_file_name)
+    #destination_file_name = file_name
+    #blob.download_to_file_name(destination_file_name)
 
-    #resp = filename + ' downloaded as ' + destination_file_name + 'in your local directory'
-    resp = 'https://storage.cloud.google.com/' + BUCKET_NAME + '/' + filename
+    #resp = file_name + ' downloaded as ' + destination_file_name + 'in your local directory'
+    resp = 'https://storage.cloud.google.com/' + BUCKET_NAME + '/' + file_name
     return resp
 
 #print (download_file('sample.png'))
