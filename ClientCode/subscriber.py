@@ -117,7 +117,8 @@ def upload_file(filename):
 def delete_file(filename):
     try:
         print("DELETE: Trying to delete file ", filename)
-        logger.info("DELETE: Trying to delete file ", filename)
+        logger.info("DELETE: Trying to delete file ")
+        logger.info(filename)
         while True:
             if(not check_file_exist(filename)):
                 time.sleep(15)
