@@ -62,16 +62,19 @@ def index():
 @cross_origin(supports_credentials=True)
 @app.route('/upload', methods=['POST'])
 def upload():
+
     body = request.get_json()
     user_id = request.form.get('userId')
-    
+
     print ('API ENDPOINT: Upload')
+    print ('User Id ', user_id)
     file_obj = request.files.get('file')
+
     file_obj_read=file_obj.read()
     file_obj.seek(0)
     file_size = len(file_obj_read)
     
-    file_name = file_obj.file_name
+    file_name = file_obj.filename
     original_file_name = file_name
 
     file_name = str(user_id) + file_name 
@@ -88,13 +91,20 @@ def upload():
     print("FIREBASE: UPDATE SUCCESS")
     # file_size = 10
     # Find available storage, update its space in DB
-    print("FIREBASE: Finding Free Storage Device")
-    storage_id = find_available_storage(file_size)
+
+    storage_id = check_if_file_exists_das(user_id, original_file_name)
     if storage_id == None:
-        # Not enough storage space
-        print("FIREBASE: Not enough storage space available")
+        print("FIREBASE: Finding Free Storage Device")
+        storage_id = find_available_storage(file_size)
+        if storage_id == None:
+            # Not enough storage space
+            print("FIREBASE: Not enough storage space available")
+
+        else:
+            print("FIREBASE: Storage Id Found ", storage_id)
+
     else:
-        print("FIREBASE: Storage Id Found ", storage_id)
+        print("FIREBASE: File already exists in storage Device", storage_id)
 
     topic = storage_id
     
@@ -106,7 +116,9 @@ def upload():
     payload = build_payload(action,file_name)
     
     print("PUBSUB: publishing message to topic ", topic)
-    publish(topic, payload)
+
+    if topic != None:
+        publish(topic, payload)
     print("PUBSUB: Message published")
     print("API SUCCESS: Returning status ", 200)
     return 'UPLOAD_COMPLETE', 200
@@ -208,17 +220,17 @@ def server_error(e):
 
 def delete_file_from_storage_after_time_t(t, file_name):
     time.sleep(t)
-    print("THREAD: Delete executed")
     delete_file_from_cloud(file_name)
+    print("THREAD: Delete executed")
 
 def find_available_storage(file_size):
     storage_id = None
     sd_collection = db.reference('/storageDevices')
     storage_dic = sd_collection.get()
-    sorted_keys = sorted(d, key=lambda x: storage_dic[x]["availableSpace"])
+    sorted_keys = sorted(storage_dic, key=lambda x: storage_dic[x]["availableSpace"])
     for k in sorted_keys:
-        if(storage_dic[key]['availableSpace']>=file_size):
-            storage_id = device_obj['storageId']
+        if(storage_dic[k]['availableSpace']>=file_size):
+            storage_id = storage_dic[k]['storageId']
             storage_dic[k]['availableSpace'] = storage_dic[k]['availableSpace']-file_size
             break
     sd_collection.set(storage_dic)
@@ -235,13 +247,26 @@ def find_storage_id(user_id, file_name):
     print("File found in storage id", storage_id)
     return storage_id
 
-def update_user_quota(user_id, file_size):  
+def check_if_file_exists_das(user_id, file_name):
+    path = ['users', user_id]
+    path = "/".join(path)
+    users_ref = db.reference(path)
+    users_dic = users_ref.get()
+    file_key = file_name.replace('.','')
+    if 'files' in users_dic and file_key in users_dic['files']:
+        return users_dic['files'][file_key]['storageId']
+    return None
+
+def update_user_quota(user_id, file_size, flag):  
     path = ['users', user_id]
     path = "/".join(path)
     users_ref = db.reference(path)
     users_dic = users_ref.get()
     print("FIREBASE: Userid ", user_id, " Current Space Used: ", users_dic['spaceUsed'])
-    users_dic['spaceUsed'] = users_dic['spaceUsed'] + file_size
+    if flag:
+        users_dic['spaceUsed'] = users_dic['spaceUsed'] + file_size
+    else:
+        users_dic['spaceUsed'] = users_dic['spaceUsed'] - file_size
     print("FIREBASE: UserId ", user_id, " Updated Space usage: ", users_dic['spaceUsed'])
     users_ref.set(users_dic)
 
@@ -365,4 +390,4 @@ def download_file(file_name):
 if __name__ == '__main__':
     # This is used when running locally. Gunicorn is used to run the
     # application on Google App Engine. See entrypoint in app.yaml.
-    app.run(host='127.0.0.1', port=3000, debug=True)
+    app.run(host='127.0.0.1', port=8080, debug=True)
