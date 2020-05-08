@@ -43,21 +43,25 @@ def delete_file_from_cloud(blob_name):
     """Deletes a blob from the bucket."""
     # bucket_name = "your-bucket-name"
     # blob_name = "your-object-name"
-    print ('Deletion from the Google Storage started!')
+    print ('DELETE GCS: Deletion from the Google Storage started!')
+    
+    logger.info('DELETE GCS: Deletion from the Google Storage started!')
     storage_client = storage.Client()
     bucket = storage_client.bucket('cc2020project2_bucket')
     blob = bucket.blob(blob_name)
     blob.delete()
 
     resp = "Blob {} from the Google Storage successfully deleted".format(blob_name)
-    return resp
+    print('DELETE GCS: ', resp)
+    logger.info(resp)
 
 def download_file(filename):
     """Downloads a blob from the bucket."""
     # bucket_name = "your-bucket-name"
     # source_blob_name = "storage-object-name"
     # destination_file_name = "local/path/to/file"
-    print ('Download started!')
+    print('DOWNLOAD: Download started!')
+    logger.info('DOWNLOAD: Download started!')
     #blob_name = request.args.get('filename')
     storage_client = storage.Client()
 
@@ -67,30 +71,21 @@ def download_file(filename):
     destination_file_name = filename
     blob.download_to_filename(destination_file_name)
 
-    resp = source_blob_name + ' downloaded as ' + destination_file_name
-    print(resp)
-
-    resp = delete_file_from_cloud(filename)
-    print(resp)
+    delete_file_from_cloud(filename)
+    print('DOWNLOAD: Download finished!')
+    logger.info('DOWNLOAD: Download finished!')
 
 def check_file_exist(filename):
-    f = open(filename, "rb")
-
-    if not f:
-        print("Not file")
-        f.close()
-        return False
-    else:
-        print("File opened")
-        f.close()
-        return True
-    
+    return os.path.exists(filename)
 
 #To upload file to Google Storage
 def upload_file(filename):
+    print("UPLOAD: uploading file ", filename , " to GCS")
+    logger.info("UPLOAD: uploading file to GCS")
     try:
         """Process the uploaded file and upload it to Google Cloud Storage."""
         if(not check_file_exist(filename)):
+            print("UPLOAD: File doesn't exist")
             logger.error("UPLOAD - File doesn't exist")
             return
         
@@ -111,22 +106,24 @@ def upload_file(filename):
             upload_file.read(),
             content_type=content_type
         )
-        print (blob.public_url)
         # The public URL can be used to directly access the uploaded file via HTTP.
-        print( 'File uploaded succesfully in Google Storage at ' + blob.public_url)
+        print('UPLOAD GCS: File uploaded succesfully in Google Storage at ', blob.public_url)
+        logger.info('UPLOAD GCS: File uploaded succesfully in Google Storage')
+    
     except IOError:
         print("File not accessible")
 #upload_file('1sample.png')
 #Delete file locally
 def delete_file(filename):
     try:
-        print(filename)
+        print("DELETE: Trying to delete file ", filename)
+        logger.info("DELETE: Trying to delete file ", filename)
         while True:
-            time.sleep(15)
             if(not check_file_exist(filename)):
-                logger.info("DELETE: Trying to delete file " + filename)
+                time.sleep(15)
                 continue
             os.remove(filename)
+            print("DELETE: Deleted file", filename)
             logger.info("DELETE: Deleted file " + filename)
             break        
     except IOError:
@@ -135,8 +132,8 @@ def delete_file(filename):
 def callback(message):
 
     print("Received message: {}".format(message))
-
-    json_object = json.loads(message.data.decode(encoding='utf-8'))
+    print("\n")
+    json_object = json.loads(message.data.decode(encoding="utf-8"))
     action = json_object['action'] 
     filename = json_object['filename']
     if action == 'download':
@@ -154,7 +151,7 @@ def callback(message):
 
 streaming_pull_future = subscriber.subscribe(subscription_path, callback=callback)
 while True:
-    #time.sleep(0.1)
     streaming_pull_future.result()
+    time.sleep(0.1)
 
 subscriber.close()
