@@ -83,12 +83,6 @@ def upload():
     
     print("File size: ", file_size)
 
-    print("GCS: Uploading file to Cloud Storage...")
-    url=upload_file(file_obj, file_name)
-    print("GCS: UPLOAD SUCCESS")
-    print("FIREBASE: Updating user space usage")
-    update_user_quota(user_id,file_size, True)
-    print("FIREBASE: UPDATE SUCCESS")
     # file_size = 10
     # Find available storage, update its space in DB
 
@@ -99,7 +93,7 @@ def upload():
         if storage_id == None:
             # Not enough storage space
             print("FIREBASE: Not enough storage space available")
-
+            return "SPACE_EXCEEDED", 200
         else:
             print("FIREBASE: Storage Id Found ", storage_id)
 
@@ -107,6 +101,14 @@ def upload():
         print("FIREBASE: File already exists in storage Device", storage_id)
 
     topic = storage_id
+
+    print("GCS: Uploading file to Cloud Storage...")
+    url=upload_file(file_obj, file_name)
+    print("GCS: UPLOAD SUCCESS")
+
+    print("FIREBASE: Updating user space usage")
+    update_user_quota(user_id,file_size, True)
+    print("FIREBASE: UPDATE SUCCESS")
     
     print("FIREBASE: Updating File objects for user ", user_id)
     update_user_files(user_id,storage_id,original_file_name,file_size)
@@ -227,11 +229,11 @@ def find_available_storage(file_size):
     storage_id = None
     sd_collection = db.reference('/storageDevices')
     storage_dic = sd_collection.get()
-    sorted_keys = sorted(storage_dic, key=lambda x: storage_dic[x]["availableSpace"])
+    sorted_keys = sorted(storage_dic, key=lambda x: (storage_dic[x]['totalSpace']-storage_dic[x]['spaceUsed']))
     for k in sorted_keys:
-        if(storage_dic[k]['availableSpace']>=file_size):
+        if((storage_dic[k]['totalSpace']-storage_dic[k]['spaceUsed'])>=file_size):
             storage_id = storage_dic[k]['storageId']
-            storage_dic[k]['availableSpace'] = storage_dic[k]['availableSpace']-file_size
+            storage_dic[k]['spaceUsed'] = storage_dic[k]['spaceUsed'] + file_size
             break
     sd_collection.set(storage_dic)
     return storage_id
@@ -244,7 +246,7 @@ def find_storage_id(user_id, file_name):
     path = ['users',user_id,'files',file_name,'storageId']
     path = "/".join(path)
     storage_id = db.reference(path).get()
-    print("File found in storage id", storage_id)
+    print("File found in storage id ", storage_id)
     return storage_id
 
 def check_if_file_exists_das(user_id, file_name):
@@ -299,8 +301,7 @@ def delete_user_file_DB(user_id,file_name):
     path = "/".join(path)
     sd_ref = db.reference(path)
     storage_dic = sd_ref.get()
-    print(storage_dic)
-    storage_dic['availableSpace']=storage_dic['availableSpace']+file_size
+    storage_dic['spaceUsed'] = storage_dic['spaceUsed'] - file_size
     sd_ref.set(storage_dic)
     print("FIREBASE: SUCCESS")
     
@@ -322,7 +323,7 @@ def publish(topic, payload):
 # [END gae_flex_pubsub_index]
 
 def build_payload(action, file_name):
-    d = {"action":action, "file_name":file_name}
+    d = {"action":action, "filename":file_name}
     return json.dumps(d)
 
 #To upload file to Google Storage
