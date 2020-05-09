@@ -121,6 +121,7 @@ def delete_file(filename):
         logger.info(filename)
         while True:
             if(not check_file_exist(filename)):
+                print("DELETE: Trying to delete file ", filename)        
                 time.sleep(15)
                 continue
             os.remove(filename)
