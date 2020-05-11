@@ -83,11 +83,11 @@ def upload():
     print("Secure File name: ", file_name)
     
     print("File size: ", file_size)
-
+    
     # file_size = 10
     # Find available storage, update its space in DB
 
-    storage_id = check_if_file_exists_das(user_id, original_file_name)
+    [storage_id, prev_file_size] = check_if_file_exists_das(user_id, original_file_name)
     if storage_id == None:
         print("FIREBASE: Finding Free Storage Device")
         storage_id = find_available_storage(file_size)
@@ -108,7 +108,10 @@ def upload():
     print("GCS: UPLOAD SUCCESS")
 
     print("FIREBASE: Updating user space usage")
-    update_user_quota(user_id,file_size, True)
+    if prev_file_size == None:
+        update_user_quota(user_id,file_size, True)
+    else:
+        update_user_quota(user_id,file_size - prev_file_size, True)
     print("FIREBASE: UPDATE SUCCESS")
     
     print("FIREBASE: Updating File objects for user ", user_id)
@@ -142,7 +145,7 @@ def delete():
     
     print("Secure File name: ", file_name)
     #TODO DB Find on which device user's file is stored
-    storage_id = check_if_file_exists_das(user_id, original_file_name)
+    storage_id = find_storage_id(user_id, original_file_name)
     if storage_id == None:
         return "FILE_NOT_EXIST", 200
 
@@ -187,7 +190,7 @@ def download():
     
 
     print("FIREBASE: Finding storage where the file is stored")
-    storage_id = check_if_file_exists_das(user_id, original_file_name)
+    storage_id = find_storage_id(user_id, original_file_name)
     
     if storage_id==None:
         #TODO ERROR HANDLING
@@ -262,8 +265,8 @@ def check_if_file_exists_das(user_id, file_name):
     users_dic = users_ref.get()
     file_key = file_name.replace('.','')
     if 'files' in users_dic and file_key in users_dic['files']:
-        return users_dic['files'][file_key]['storageId']
-    return None
+        return [users_dic['files'][file_key]['storageId'], users_dic['files'][file_key]['fileSize']] 
+    return [None, None]
 
 def update_storage_space(storage_id, file_size):
     print("FIREBASE: Updating available space for Storage Device: ", storage_id)
@@ -274,6 +277,12 @@ def update_storage_space(storage_id, file_size):
     storage_dic['spaceUsed'] = storage_dic['spaceUsed'] - file_size
     sd_ref.set(storage_dic)
     print("FIREBASE: SUCCESS")
+    
+    '''
+    storage_dic = sd_ref.get()
+    storage_dic['spaceUsed'] = storage_dic['spaceUsed'] - file_size
+    sd_ref.set(storage_dic)
+    '''
 
 def update_user_quota(user_id, file_size, flag):  
     path = ['users', user_id]
